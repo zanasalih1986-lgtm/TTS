@@ -1,0 +1,592 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<link rel="manifest" href="manifest.json">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Standalone Text to Speech Reader</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mammoth/1.4.18/mammoth.browser.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/pptxgenjs@3.12.0/dist/pptxgen.bundle.js"></script>
+    <style>
+        /* Custom scrollbar for better aesthetics */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: var(--panel-bg, #f1f1f1); }
+        ::-webkit-scrollbar-thumb { background: #888; border-radius: 4px; }
+        ::-webkit-scrollbar-thumb:hover { background: #555; }
+        /* Theme styles */
+        .theme-light {
+            --bg-color: #ffffff; --text-color: #1f2937; --panel-bg: #f3f4f6;
+            --button-bg: #e5e7eb; --button-hover: #d1d5db; --highlight-bg: rgba(253, 224, 71, 0.5);
+            --border-color: #d1d5db;
+        }
+        .theme-dark {
+            --bg-color: #1f2937; --text-color: #f9fafb; --panel-bg: #374151;
+            --button-bg: #4b5563; --button-hover: #6b7280; --highlight-bg: rgba(250, 204, 21, 0.6);
+            --border-color: #4b5563;
+        }
+        .theme-sepia {
+            --bg-color: #fbf0d9; --text-color: #5d4037; --panel-bg: #efebe9;
+            --button-bg: #d7ccc8; --button-hover: #bcaaa4; --highlight-bg: rgba(213, 0, 0, 0.3);
+            --border-color: #bcaaa4;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            transition: background-color 0.3s, color 0.3s;
+        }
+        .highlight { background-color: var(--highlight-bg); border-radius: 3px; }
+        #content-display { white-space: pre-wrap; word-wrap: break-word; }
+        .word { cursor: pointer; }
+        .bookmark-item {
+            padding: 8px;
+            cursor: pointer;
+            border-bottom: 1px solid var(--border-color);
+            transition: background-color 0.2s;
+        }
+        .bookmark-item:hover {
+            background-color: var(--button-hover);
+        }
+        /* Style for disabled buttons */
+        .control-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+    </style>
+</head>
+<body class="font-sans theme-light">
+
+    <div class="flex flex-col md:flex-row h-screen">
+        <div id="library-panel" class="w-full md:w-1/4 bg-[var(--panel-bg)] p-4 overflow-y-auto transition-colors duration-300 border-r border-[var(--border-color)]">
+            <h2 class="text-2xl font-bold mb-4 flex items-center">
+                <i class="fas fa-book-open mr-2"></i> My Library
+            </h2>
+            <div class="mb-4">
+                <label for="file-upload" class="cursor-pointer w-full inline-block text-center bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-lg transition-all">
+                    <i class="fas fa-plus-circle mr-2"></i> Add New Book
+                </label>
+                <input id="file-upload" type="file" class="hidden" accept=".txt,.pdf,.docx,.pptx">
+            </div>
+            <div id="library-list" class="space-y-2"></div>
+        </div>
+        
+        <div id="bookmarks-panel" class="hidden md:w-1/4 bg-[var(--panel-bg)] p-4 overflow-y-auto transition-colors duration-300 border-r border-[var(--border-color)]">
+             <h2 class="text-2xl font-bold mb-4 flex items-center">
+                <i class="fas fa-bookmark mr-2"></i> Bookmarks
+            </h2>
+            <div id="bookmarks-list"></div>
+        </div>
+
+        <main id="main-content" class="flex-1 flex flex-col p-4 md:p-6 overflow-hidden bg-[var(--bg-color)]">
+            <div id="welcome-screen" class="flex-1 flex flex-col items-center justify-center text-center">
+                 <i class="fas fa-headphones-alt text-6xl text-gray-400 mb-4"></i>
+                 <h1 class="text-4xl font-bold mb-2">Welcome to your Audio Reader</h1>
+                 <p class="text-lg text-gray-500">Add a book from your library to get started.</p>
+            </div>
+
+            <div id="reader-view" class="hidden flex-1 flex flex-col overflow-hidden">
+                <h1 id="book-title" class="text-3xl font-bold mb-4 truncate"></h1>
+                <div id="content-display" class="flex-1 overflow-y-auto p-4 bg-[var(--panel-bg)] rounded-lg text-lg leading-relaxed transition-colors duration-300"></div>
+
+                <div class="mt-4 p-4 bg-[var(--panel-bg)] rounded-lg shadow-md transition-colors duration-300">
+                    <div class="flex items-center justify-center space-x-4 md:space-x-6">
+                        <button id="skip-backward-btn" class="control-btn text-2xl w-12 h-12 rounded-full bg-[var(--button-bg)] hover:bg-[var(--button-hover)] flex items-center justify-center transition-all shadow-md"><i class="fas fa-backward"></i></button>
+                        <button id="play-pause-btn" class="text-3xl md:text-4xl w-16 h-16 rounded-full bg-blue-500 hover:bg-blue-600 text-white flex items-center justify-center transition-all shadow-lg"><i class="fas fa-play"></i></button>
+                        <button id="skip-forward-btn" class="control-btn text-2xl w-12 h-12 rounded-full bg-[var(--button-bg)] hover:bg-[var(--button-hover)] flex items-center justify-center transition-all shadow-md"><i class="fas fa-forward"></i></button>
+                    </div>
+                    <div class="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4 items-center">
+                         <div class="flex items-center space-x-2">
+                            <i class="fas fa-tachometer-alt w-5 text-center"></i>
+                            <input id="speed-control" type="range" min="0.5" max="3" value="1" step="0.1" class="w-full">
+                            <span id="speed-label" class="text-sm font-mono w-10 text-center">1.0x</span>
+                        </div>
+                         <div class="flex items-center space-x-2">
+                            <i class="fas fa-volume-up w-5 text-center"></i>
+                            <input id="volume-control" type="range" min="0" max="1" value="1" step="0.05" class="w-full">
+                            <span id="volume-label" class="text-sm font-mono w-10 text-center">100%</span>
+                        </div>
+                        <div class="md:col-span-2 flex items-center space-x-2">
+                            <i class="fas fa-user-voice w-5 text-center"></i>
+                             <select id="voice-select" class="bg-[var(--button-bg)] rounded-md p-1 text-sm w-full"></select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <div class="w-full md:w-16 bg-[var(--panel-bg)] p-4 flex flex-row md:flex-col items-center justify-center md:justify-start space-x-4 md:space-x-0 md:space-y-4 border-l border-[var(--border-color)]">
+             <h3 class="hidden md:block text-lg font-semibold mb-2">View</h3>
+             <button data-theme="theme-light" title="Light Theme" class="theme-btn w-10 h-10 rounded-full bg-white border-2 border-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500"></button>
+             <button data-theme="theme-dark" title="Dark Theme" class="theme-btn w-10 h-10 rounded-full bg-gray-800 border-2 border-gray-600 focus:outline-none focus:ring-2 focus:ring-blue-500"></button>
+             <button data-theme="theme-sepia" title="Sepia Theme" class="theme-btn w-10 h-10 rounded-full bg-[#fbf0d9] border-2 border-[#d7ccc8] focus:outline-none focus:ring-2 focus:ring-blue-500"></button>
+             <button id="toggle-bookmarks-btn" title="Toggle Bookmarks" class="control-btn w-10 h-10 rounded-full bg-[var(--button-bg)] flex items-center justify-center text-lg focus:outline-none focus:ring-2 focus:ring-blue-500" disabled><i class="fas fa-bookmark"></i></button>
+             <button id="fullscreen-btn" title="Toggle Fullscreen" class="control-btn w-10 h-10 rounded-full bg-[var(--button-bg)] flex items-center justify-center text-lg focus:outline-none focus:ring-2 focus:ring-blue-500"><i class="fas fa-expand"></i></button>
+        </div>
+    </div>
+    
+    <div id="loading-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+        <div class="bg-white text-gray-800 p-8 rounded-lg shadow-xl text-center">
+            <div class="animate-spin rounded-full h-16 w-16 border-t-4 border-b-4 border-blue-500 mx-auto mb-4"></div>
+            <p class="text-xl font-semibold">Processing your book...</p>
+        </div>
+    </div>
+
+    <script>
+        // --- GLOBAL STATE ---
+        let library = [];
+        let currentBookId = null;
+        let currentText = '';
+        let currentBookmarks = [];
+        let pageCharacterMap = [];
+        let utterance = null;
+        let isPaused = true;
+        let progressInterval;
+        let lastSpokenIndex = 0;
+        const SKIP_AMOUNT = 150; // Number of characters to skip
+        let voiceListInterval;
+
+        // --- UI ELEMENTS ---
+        const ui = {
+            fileUpload: document.getElementById('file-upload'),
+            libraryList: document.getElementById('library-list'),
+            bookTitle: document.getElementById('book-title'),
+            contentDisplay: document.getElementById('content-display'),
+            playPauseBtn: document.getElementById('play-pause-btn'),
+            skipBackwardBtn: document.getElementById('skip-backward-btn'),
+            skipForwardBtn: document.getElementById('skip-forward-btn'),
+            speedControl: document.getElementById('speed-control'),
+            speedLabel: document.getElementById('speed-label'),
+            volumeControl: document.getElementById('volume-control'),
+            volumeLabel: document.getElementById('volume-label'),
+            voiceSelect: document.getElementById('voice-select'),
+            welcomeScreen: document.getElementById('welcome-screen'),
+            readerView: document.getElementById('reader-view'),
+            loadingModal: document.getElementById('loading-modal'),
+            bookmarksPanel: document.getElementById('bookmarks-panel'),
+            bookmarksList: document.getElementById('bookmarks-list'),
+            toggleBookmarksBtn: document.getElementById('toggle-bookmarks-btn'),
+            fullscreenBtn: document.getElementById('fullscreen-btn'),
+            mainContent: document.getElementById('main-content'),
+        };
+
+        // --- SPEECH SYNTHESIS SETUP ---
+        const synth = window.speechSynthesis;
+
+        function populateVoiceList() {
+            if (voiceListInterval) clearInterval(voiceListInterval);
+            const tryGetVoices = () => {
+                const voices = synth.getVoices();
+                if (voices.length > 0) {
+                    clearInterval(voiceListInterval);
+                    const savedVoiceName = getSettings().voice;
+                    ui.voiceSelect.innerHTML = '';
+                    voices.forEach(voice => {
+                        const option = document.createElement('option');
+                        option.textContent = `${voice.name} (${voice.lang})`;
+                        option.setAttribute('data-name', voice.name);
+                        if (voice.name === savedVoiceName) option.selected = true;
+                        ui.voiceSelect.appendChild(option);
+                    });
+                }
+            };
+            tryGetVoices();
+            if (synth.getVoices().length === 0) voiceListInterval = setInterval(tryGetVoices, 250);
+        }
+
+        // --- CORE FUNCTIONS ---
+        function speak(text, resumeFrom = 0) {
+            if (synth.speaking) synth.cancel();
+            if (text !== '') {
+                const textToSpeak = text.substring(resumeFrom);
+                utterance = new SpeechSynthesisUtterance(textToSpeak);
+                const selectedOption = ui.voiceSelect.options[ui.voiceSelect.selectedIndex];
+                const selectedVoiceName = selectedOption ? selectedOption.getAttribute('data-name') : null;
+                const voices = synth.getVoices();
+                utterance.voice = voices.find(voice => voice.name === selectedVoiceName) || voices[0];
+                utterance.rate = parseFloat(ui.speedControl.value);
+                utterance.volume = parseFloat(ui.volumeControl.value);
+                utterance.onstart = () => { isPaused = false; ui.playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>'; startProgressTracking(); };
+                utterance.onpause = () => { isPaused = true; ui.playPauseBtn.innerHTML = '<i class="fas fa-play"></i>'; clearInterval(progressInterval); };
+                utterance.onresume = () => { isPaused = false; ui.playPauseBtn.innerHTML = '<i class="fas fa-pause"></i>'; startProgressTracking(); };
+                utterance.onend = () => { isPaused = true; ui.playPauseBtn.innerHTML = '<i class="fas fa-play"></i>'; clearInterval(progressInterval); lastSpokenIndex = text.length; saveProgress(); removeHighlight(); };
+                utterance.onboundary = (event) => {
+                    if (event.name === 'word') {
+                       lastSpokenIndex = resumeFrom + event.charIndex;
+                       jumpToWord(lastSpokenIndex, 'smooth');
+                    }
+                };
+                synth.speak(utterance);
+            }
+        }
+        
+        function togglePlayPause() {
+            if (!currentBookId || !currentText) return;
+            if (synth.speaking && !isPaused) synth.pause();
+            else if (synth.speaking && isPaused) synth.resume();
+            else speak(currentText, lastSpokenIndex);
+        }
+
+        function skip(direction) {
+            if (!currentBookId) return;
+            const wasSpeaking = synth.speaking && !isPaused;
+            const newIndex = direction === 'forward' ? Math.min(currentText.length, lastSpokenIndex + SKIP_AMOUNT) : Math.max(0, lastSpokenIndex - SKIP_AMOUNT);
+            lastSpokenIndex = newIndex;
+            jumpToWord(newIndex, 'auto');
+            saveProgress();
+            if (wasSpeaking) speak(currentText, lastSpokenIndex);
+        }
+
+        // --- FILE HANDLING ---
+        async function handleFileUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+            ui.loadingModal.classList.remove('hidden');
+            let textContent = '', bookmarks = [], pageMap = [];
+            try {
+                if (file.type === "text/plain") {
+                    textContent = await file.text();
+                } else if (file.name.endsWith('.pdf')) {
+                    const pdfData = await extractPdfData(file);
+                    textContent = pdfData.text;
+                    bookmarks = pdfData.bookmarks;
+                    pageMap = pdfData.pageMap;
+                } else if (file.name.endsWith('.docx')) {
+                    const arrayBuffer = await file.arrayBuffer();
+                    const result = await mammoth.extractRawText({ arrayBuffer });
+                    textContent = result.value;
+                } else if (file.name.endsWith('.pptx')) {
+                    textContent = await extractPptxText(file);
+                } else {
+                    throw new Error("Unsupported file type.");
+                }
+                
+                if (textContent.trim()) {
+                    addBookToLibrary(file.name, textContent, bookmarks, pageMap);
+                } else {
+                    alert("Could not extract any text from the file.");
+                }
+            } catch (error) {
+                console.error("Error processing file:", error);
+                alert(`Failed to process file: ${error.message}`);
+            } finally {
+                ui.loadingModal.classList.add('hidden');
+                event.target.value = ''; // Reset file input
+            }
+        }
+
+        async function extractPdfData(file) {
+            const arrayBuffer = await file.arrayBuffer();
+            pdfjsLib.GlobalWorkerOptions.workerSrc = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/2.11.338/pdf.worker.min.js`;
+            const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
+            let fullText = '';
+            let pageMap = [];
+            for (let i = 1; i <= pdf.numPages; i++) {
+                pageMap.push(fullText.length);
+                const page = await pdf.getPage(i);
+                const textContent = await page.getTextContent();
+                fullText += textContent.items.map(item => item.str).join(' ') + '\n\n';
+            }
+            
+            const bookmarks = await pdf.getOutline() || [];
+            const mapDestinations = async (bookmarkItems) => {
+                for (const item of bookmarkItems) {
+                    if (item.dest) {
+                        try {
+                            const destRef = Array.isArray(item.dest) ? item.dest[0] : (await pdf.getDestination(item.dest))?.[0];
+                            if (destRef) item.pageIndex = await pdf.getPageIndex(destRef);
+                        } catch(e) { 
+                            console.warn("Could not resolve bookmark destination for:", item.title, e); 
+                        }
+                    }
+                    if (item.items && item.items.length > 0) await mapDestinations(item.items);
+                }
+            };
+            await mapDestinations(bookmarks);
+            return { text: fullText, bookmarks, pageMap };
+        }
+
+        function extractPptxText(file) {
+             return new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    const pptx = new PptxGenJS();
+                    pptx.load(event.target.result)
+                        .then(p => p.slides.map(s => s.getText().map(t => t.text).join(' ')).join('\n\n'))
+                        .then(resolve)
+                        .catch(reject);
+                };
+                reader.onerror = reject;
+                reader.readAsArrayBuffer(file);
+            });
+        }
+
+        // --- LOCAL STORAGE & DATA PERSISTENCE ---
+        function getLibrary() {
+            try { return JSON.parse(localStorage.getItem('tts-library-v3')) || []; } 
+            catch (e) { console.error("Could not parse library", e); return []; }
+        }
+        function saveLibrary() { localStorage.setItem('tts-library-v3', JSON.stringify(library)); }
+        function getSettings() {
+            try { return JSON.parse(localStorage.getItem('tts-settings-v3')) || { theme: 'theme-light', speed: 1, volume: 1, voice: null }; } 
+            catch (e) { console.error("Could not parse settings", e); return { theme: 'theme-light', speed: 1, volume: 1, voice: null }; }
+        }
+        function saveSettings() {
+            const settings = { 
+                theme: document.body.className.split(' ').find(c => c.startsWith('theme-')), 
+                voice: ui.voiceSelect.options[ui.voiceSelect.selectedIndex]?.getAttribute('data-name'), 
+                speed: parseFloat(ui.speedControl.value), 
+                volume: parseFloat(ui.volumeControl.value) 
+            };
+            localStorage.setItem('tts-settings-v3', JSON.stringify(settings));
+        }
+
+        function addBookToLibrary(title, content, bookmarks = [], pageMap = []) {
+            const newBook = { id: "book_" + Date.now(), title, content, progress: 0, bookmarks, pageCharacterMap: pageMap, createdAt: new Date().toISOString() };
+            library.push(newBook);
+            saveLibrary();
+            renderLibrary();
+            loadBook(newBook.id);
+        }
+
+        function deleteBook(bookId) {
+            if (!confirm(`Are you sure you want to delete this book?`)) return;
+            library = library.filter(book => book.id !== bookId);
+            saveLibrary();
+            if (currentBookId === bookId) resetReader();
+            renderLibrary();
+        }
+
+        function loadBook(bookId) {
+            if (synth.speaking) synth.cancel();
+            const book = library.find(b => b.id === bookId);
+            if (book) {
+                currentBookId = book.id;
+                currentText = book.content;
+                currentBookmarks = book.bookmarks || [];
+                pageCharacterMap = book.pageCharacterMap || [];
+                lastSpokenIndex = book.progress || 0;
+                
+                ui.bookTitle.textContent = book.title;
+                renderClickableText(currentText);
+                ui.welcomeScreen.classList.add('hidden');
+                ui.readerView.classList.remove('hidden');
+                
+                renderBookmarks();
+                ui.toggleBookmarksBtn.disabled = !(currentBookmarks && currentBookmarks.length > 0);
+                if (ui.toggleBookmarksBtn.disabled) {
+                    ui.bookmarksPanel.classList.add('hidden');
+                }
+
+                updateLibrarySelectionUI();
+                jumpToWord(lastSpokenIndex, 'auto');
+            }
+        }
+        
+        function resetReader() {
+            if (synth.speaking) synth.cancel();
+            currentBookId = null; currentText = ''; currentBookmarks = []; pageCharacterMap = []; lastSpokenIndex = 0;
+            isPaused = true; ui.playPauseBtn.innerHTML = '<i class="fas fa-play"></i>';
+            ui.welcomeScreen.classList.remove('hidden');
+            ui.readerView.classList.add('hidden');
+            ui.bookmarksPanel.classList.add('hidden');
+            ui.toggleBookmarksBtn.disabled = true;
+            updateLibrarySelectionUI();
+        }
+
+        function startProgressTracking() {
+            clearInterval(progressInterval);
+            progressInterval = setInterval(saveProgress, 5000);
+        }
+        
+        function saveProgress() {
+            if (!currentBookId) return;
+            const bookIndex = library.findIndex(b => b.id === currentBookId);
+            if (bookIndex > -1) {
+                library[bookIndex].progress = lastSpokenIndex;
+                saveLibrary();
+                const progressBar = document.querySelector(`#library-list [data-book-id="${currentBookId}"] .progress-bar`);
+                if(progressBar) {
+                    const p = (library[bookIndex].content.length > 0) ? (lastSpokenIndex / library[bookIndex].content.length * 100) : 0;
+                    progressBar.style.width = `${p.toFixed(0)}%`;
+                }
+            }
+        }
+
+        // --- UI & UX ---
+        function renderLibrary() {
+            ui.libraryList.innerHTML = '';
+            if (library.length === 0) {
+                ui.libraryList.innerHTML = `<p class="text-gray-500 italic">Your library is empty.</p>`;
+                return;
+            }
+            library.forEach(book => {
+                const p = (book.content.length > 0) ? (book.progress / book.content.length * 100) : 0;
+                const el = document.createElement('div');
+                el.className = `p-3 rounded-lg cursor-pointer flex justify-between items-center transition-all ${currentBookId === book.id ? 'bg-blue-500 text-white' : 'bg-[var(--button-bg)] hover:bg-[var(--button-hover)]'}`;
+                el.dataset.bookId = book.id;
+                el.innerHTML = `<div class="flex-1 overflow-hidden"><p class="font-semibold truncate">${book.title}</p><div class="w-full bg-gray-400 rounded-full h-1.5 mt-1"><div class="progress-bar bg-green-500 h-1.5 rounded-full" style="width: ${p.toFixed(0)}%"></div></div></div><button class="delete-btn ml-2 text-red-500 hover:text-red-700 p-1 rounded-full"><i class="fas fa-trash"></i></button>`;
+                el.addEventListener('click', (e) => { if (!e.target.closest('.delete-btn')) loadBook(book.id); });
+                el.querySelector('.delete-btn').addEventListener('click', (e) => { e.stopPropagation(); deleteBook(book.id); });
+                ui.libraryList.appendChild(el);
+            });
+        }
+
+        function renderBookmarks() {
+            ui.bookmarksList.innerHTML = '';
+            if (currentBookmarks && currentBookmarks.length > 0) {
+                const fragment = document.createDocumentFragment();
+                const createBookmarkNode = (item, level) => {
+                    const node = document.createElement('div');
+                    node.className = 'bookmark-item truncate';
+                    node.textContent = item.title;
+                    node.style.paddingLeft = `${8 + level * 16}px`;
+                    node.addEventListener('click', () => {
+                        if (typeof item.pageIndex !== 'undefined' && pageCharacterMap[item.pageIndex] !== 'undefined') {
+                            const charIndex = pageCharacterMap[item.pageIndex];
+                            lastSpokenIndex = charIndex;
+                            saveProgress();
+                            jumpToWord(charIndex, 'auto');
+                            if (synth.speaking && !isPaused) speak(currentText, lastSpokenIndex);
+                            else if (synth.speaking) synth.cancel();
+                        }
+                    });
+                    return node;
+                };
+                const buildList = (items, level) => {
+                    items.forEach(item => {
+                        fragment.appendChild(createBookmarkNode(item, level));
+                        if (item.items && item.items.length > 0) buildList(item.items, level + 1);
+                    });
+                };
+                buildList(currentBookmarks, 0);
+                ui.bookmarksList.appendChild(fragment);
+            }
+        }
+
+        function renderClickableText(text) {
+            ui.contentDisplay.innerHTML = '';
+            const fragment = document.createDocumentFragment();
+            const words = text.split(/(\s+)/);
+            let charCounter = 0;
+            words.forEach(word => {
+                const span = document.createElement('span');
+                span.textContent = word;
+                if (word.trim().length > 0) {
+                    span.className = 'word';
+                    span.dataset.index = charCounter;
+                }
+                fragment.appendChild(span);
+                charCounter += word.length;
+            });
+            ui.contentDisplay.appendChild(fragment);
+        }
+
+        function jumpToWord(charIndex, scrollBehavior = 'auto') {
+            removeHighlight();
+            const words = ui.contentDisplay.querySelectorAll('.word');
+            let wordToHighlight = null;
+            for (const word of words) {
+                if (parseInt(word.dataset.index) <= charIndex) wordToHighlight = word;
+                else break;
+            }
+            if (wordToHighlight) {
+                wordToHighlight.classList.add('highlight');
+                wordToHighlight.scrollIntoView({ behavior: scrollBehavior, block: 'center' });
+            }
+        }
+        
+        function removeHighlight() {
+            const currentHighlight = ui.contentDisplay.querySelector('.highlight');
+            if (currentHighlight) currentHighlight.classList.remove('highlight');
+        }
+
+        function updateLibrarySelectionUI() {
+            document.querySelectorAll('#library-list > div').forEach(el => {
+                const isSelected = el.dataset.bookId === currentBookId;
+                el.classList.toggle('bg-blue-500', isSelected);
+                el.classList.toggle('text-white', isSelected);
+                el.classList.toggle('bg-[var(--button-bg)]', !isSelected);
+                el.classList.toggle('hover:bg-[var(--button-hover)]', !isSelected);
+            });
+        }
+        
+        function setTheme(themeClass) { document.body.className = `font-sans ${themeClass}`; saveSettings(); }
+        function applySavedSettings() {
+            const settings = getSettings();
+            setTheme(settings.theme);
+            ui.speedControl.value = settings.speed;
+            ui.speedLabel.textContent = `${parseFloat(settings.speed).toFixed(1)}x`;
+            ui.volumeControl.value = settings.volume;
+            ui.volumeLabel.textContent = `${Math.round(parseFloat(settings.volume) * 100)}%`;
+        }
+        
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) ui.mainContent.requestFullscreen().catch(err => alert(`Fullscreen error: ${err.message}`));
+            else document.exitFullscreen();
+        }
+
+        // --- EVENT LISTENERS ---
+        function setupEventListeners() {
+            ui.fileUpload.addEventListener('change', handleFileUpload);
+            ui.playPauseBtn.addEventListener('click', togglePlayPause);
+            ui.skipBackwardBtn.addEventListener('click', () => skip('backward'));
+            ui.skipForwardBtn.addEventListener('click', () => skip('forward'));
+            ui.fullscreenBtn.addEventListener('click', toggleFullscreen);
+            ui.toggleBookmarksBtn.addEventListener('click', () => ui.bookmarksPanel.classList.toggle('hidden'));
+
+            ui.contentDisplay.addEventListener('click', (event) => {
+                if (event.target.classList.contains('word')) {
+                    const index = parseInt(event.target.dataset.index, 10);
+                    lastSpokenIndex = index;
+                    saveProgress();
+                    jumpToWord(index, 'auto');
+                    if (!isPaused) speak(currentText, index);
+                }
+            });
+
+            document.addEventListener('fullscreenchange', () => {
+                ui.fullscreenBtn.innerHTML = document.fullscreenElement ? `<i class="fas fa-compress"></i>` : `<i class="fas fa-expand"></i>`;
+            });
+
+            ui.speedControl.addEventListener('input', () => { const s = parseFloat(ui.speedControl.value); ui.speedLabel.textContent = `${s.toFixed(1)}x`; if (utterance) utterance.rate = s; saveSettings(); });
+            ui.volumeControl.addEventListener('input', () => { const v = parseFloat(ui.volumeControl.value); ui.volumeLabel.textContent = `${Math.round(v * 100)}%`; if (utterance) utterance.volume = v; saveSettings(); });
+            ui.voiceSelect.addEventListener('change', () => { saveSettings(); if(synth.speaking) { const p = lastSpokenIndex; synth.cancel(); speak(currentText, p); } });
+            
+            document.querySelectorAll('.theme-btn').forEach(btn => {
+                if (btn.dataset.theme) {
+                    btn.addEventListener('click', () => setTheme(btn.dataset.theme));
+                }
+            });
+
+            window.addEventListener('beforeunload', () => { if (synth.speaking) { saveProgress(); synth.cancel(); } });
+        }
+
+        // --- INITIALIZATION ---
+        function initialize() {
+            library = getLibrary();
+            applySavedSettings();
+            populateVoiceList();
+            if (synth.onvoiceschanged !== undefined) synth.onvoiceschanged = populateVoiceList;
+            renderLibrary();
+            setupEventListeners();
+            resetReader();
+        }
+
+        window.onload = initialize;
+    </script>
+
+<script>
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', () => {
+      navigator.serviceWorker.register('/sw.js').then(registration => {
+        console.log('ServiceWorker registration successful with scope: ', registration.scope);
+      }, err => {
+        console.log('ServiceWorker registration failed: ', err);
+      });
+    });
+  }
+</script>
+</body>
+</html>
